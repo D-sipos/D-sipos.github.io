@@ -91,8 +91,9 @@
     var ringBg = ring.children[0], ringFg = ring.children[1], ringTx = ring.children[2];
     var bar = el.querySelector('.tqv-bar');
     el.querySelector('.tqv-hint').textContent = hintText;
+    if (zoom !== 1) el.querySelector('img').style.transform = 'scale(' + zoom + ')';
 
-    var gl = canvas.getContext('webgl2', { antialias: false, alpha: false }) || canvas.getContext('webgl', { antialias: false, alpha: false });
+    var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' }) || canvas.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'high-performance' });
     if (!gl) return;
     var isGL2 = (typeof WebGL2RenderingContext !== 'undefined') && gl instanceof WebGL2RenderingContext;
     var man = null, prog = null, U = {}, lutTex = null;
@@ -101,7 +102,7 @@
     var sw = [1, 1], dim = 1, lastDim = 1;      // targets
     var cur = [1, 1, 1];                         // animated: dimmer, L, R
     var lastPair = null, raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
-    var MAXTEX = 14;
+    var MAXTEX = 18, csW = 0, ovI = -1, ovInit = false;
 
     function compile(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
     function initGL() {
@@ -127,7 +128,7 @@
     }
     function makeTex(src, mip) {
       var t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       if (mip && isGL2) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); }
@@ -142,12 +143,12 @@
     }
     function wantTex(i) {
       if (texCache[i]) { texCache[i].t = ++clock; return texCache[i].tex; }
-      if (!decoding[i] && blobs[i] && nDecoding < 3) {
+      if (!decoding[i] && blobs[i] && nDecoding < 4) {
         decoding[i] = true; nDecoding++;
         decodeBlob(blobs[i]).then(function (bm) {
           delete decoding[i]; nDecoding--;
           if (gl.isContextLost()) return;
-          texCache[i] = { tex: makeTex(bm, true), t: ++clock };
+          texCache[i] = { tex: makeTex(bm, false), t: ++clock };
           if (bm.close) bm.close();
           evict(); kick();
         }, function () { delete decoding[i]; nDecoding--; });
@@ -180,8 +181,10 @@
     }
     function stateIndex() { return sw[0] && sw[1] ? 0 : (sw[0] ? 1 : (sw[1] ? 2 : 3)); }
     function resize() {
-      var r = canvas.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2);
-      var w = Math.max(2, Math.min(Math.round(r.width * dpr), Math.round(man.w * 1.5)));
+      if (!csW) csW = canvas.getBoundingClientRect().width || man.w;
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // never below the visible source pixels (no minification), never above the source size (nothing to gain)
+      var w = Math.max(Math.round(man.w / zoom), Math.min(Math.round(csW * dpr), man.w));
       var h = Math.round(w * man.h / man.w);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     }
@@ -191,12 +194,17 @@
       if (ta && tb) p = want;
       else if (ta) p = { a: want.a, b: want.a, mix: 0 };
       else if (tb) p = { a: want.b, b: want.b, mix: 0 };
-      else if (lastPair && texCache[lastPair.a] && texCache[lastPair.b]) p = lastPair;
+      else {
+        var nc = null, bd = 1e9;                       // show the closest frame we already have instead of freezing
+        for (var kk in texCache) { var dd = Math.abs(+kk - pos); if (dd < bd) { bd = dd; nc = +kk; } }
+        if (nc !== null) p = { a: nc, b: nc, mix: 0 };
+        else if (lastPair && texCache[lastPair.a] && texCache[lastPair.b]) p = lastPair;
+      }
       if (!p) return;
       lastPair = p;
       // prefetch in the direction of travel
       var dir = vel >= 0 ? 1 : -1, idx = loaded.indexOf(dir > 0 ? want.b : want.a);
-      for (var s = 1; s <= 3 && idx >= 0; s++) { var q = loaded[idx + dir * s]; if (q !== undefined) wantTex(q); }
+      for (var s = 1; s <= 4 && idx >= 0; s++) { var q = loaded[idx + dir * s]; if (q !== undefined) wantTex(q); }
       resize();
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCache[p.a].tex);
@@ -217,10 +225,14 @@
     }
     function overlay() {
       var i = gi(), g = man.geom, k = g.knob[i], W = man.w, H = man.h;
-      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-      gEl.setAttribute('transform', 'translate(' + W / 2 + ' ' + H / 2 + ') scale(' + zoom + ') translate(' + (-W / 2) + ' ' + (-H / 2) + ')');
+      if (!ovInit) {
+        ovInit = true;
+        svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+        gEl.setAttribute('transform', 'translate(' + W / 2 + ' ' + H / 2 + ') scale(' + zoom + ') translate(' + (-W / 2) + ' ' + (-H / 2) + ')');
+      }
       var kx = k[0] * W, ky = k[1] * H, kr = k[4] * H;
-      if (!el.classList.contains('tqv-used')) {
+      if (i !== ovI && !el.classList.contains('tqv-used')) {
+        ovI = i;
         var pts = [[kx, ky, kr + 9]];
         ['capL', 'capR'].forEach(function (n) { var c = g[n][i]; pts.push([(c[0] + c[2] + c[4] + c[6]) / 4 * W, (c[1] + c[3] + c[5] + c[7]) / 4 * H, 13]); });
         for (var j = 0; j < 3; j++) { pulses[j].setAttribute('cx', pts[j][0].toFixed(1)); pulses[j].setAttribute('cy', pts[j][1].toFixed(1)); pulses[j].setAttribute('r', pts[j][2]); pulses[j].style.animationDelay = (j * 0.35) + 's'; }
@@ -304,17 +316,18 @@
     canvas.addEventListener('pointermove', function (ev) {
       if (!man) return;
       if (mode === null) {
-        var h = hit(ev); hoverKnob = h === 'knob';
-        canvas.style.cursor = h === 'knob' ? 'ew-resize' : (h ? 'pointer' : 'grab');
-        kick(); return;
+        var h = hit(ev), hk = h === 'knob';
+        canvas.style.cursor = hk ? 'ew-resize' : (h ? 'pointer' : 'grab');
+        if (hk !== hoverKnob) { hoverKnob = hk; kick(); }
+        return;
       }
       if (ev.pointerId !== pid) return;
-      var dx = ev.clientX - sx, dy = ev.clientY - sy, w = canvas.getBoundingClientRect().width;
+      var dx = ev.clientX - sx, dy = ev.clientY - sy, w = csW || canvas.getBoundingClientRect().width;
       moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
       if (mode === 'knob') { if (moved > 4) setDim(sDim + (dx - dy) / 150); }
       else {
         if (moved > 6) { pend = null; used(); }
-        var fpp = (man.n - 1) / (w * 1.25), np = sPos - dx * fpp;
+        var fpp = (man.n - 1) / (w * 1.5), np = sPos - dx * fpp;
         var lim = [loaded[0], loaded[loaded.length - 1]];
         np = Math.max(lim[0], Math.min(lim[1], np));
         var dtm = Math.max(1, ev.timeStamp - lastMT);
@@ -346,7 +359,8 @@
     });
     canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; lastPair = null; prog = null; });
     canvas.addEventListener('webglcontextrestored', function () { boot(); });
-    if (window.ResizeObserver) new ResizeObserver(function () { if (man) kick(); }).observe(el);
+    if (window.ResizeObserver) new ResizeObserver(function () { csW = 0; if (man) kick(); }).observe(el);
+    else window.addEventListener('resize', function () { csW = 0; if (man) kick(); });
 
     // ---------- loading ----------
     function order() {
