@@ -127,6 +127,8 @@ figcaption{color:var(--dim);font-size:.9rem;line-height:1.4;padding-top:8px}
 .ctl button:hover,.ctl button:active{background:var(--gold);color:#14110a}
 .ctl label{display:flex;align-items:center;gap:10px;flex:1 1 190px;min-width:0;color:var(--dim);font-size:.92rem}
 .ctl input[type=range]{flex:1;min-width:0;accent-color:var(--gold)}
+.ctl .val{min-width:3.6ch;text-align:right;color:#fff;font-weight:600;font-variant-numeric:tabular-nums}
+.ctl .val.zero{color:var(--gold)}
 .gfx.split{display:grid;grid-template-columns:minmax(0,1fr);align-items:center}
 @media (min-width:560px){.gfx.split{grid-template-columns:minmax(0,5fr) minmax(0,6fr)}}
 .picks{display:grid;gap:8px;padding:16px 18px 18px}
@@ -392,7 +394,7 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-betw
               <div class="ctl">
                 <button type="button" id="bkL" data-i18n="bs.b1">Push left</button>
                 <button type="button" id="bkR" data-i18n="bs.b2">Push right</button>
-                <label><span data-i18n="bs.b3">Steering</span><input type="range" id="bkS" min="-50" max="50" step="1" value="0"></label>
+                <label><span data-i18n="bs.b3">Steering</span><input type="range" id="bkS" min="-50" max="50" step="1" value="0"><output id="bkSv" class="val" for="bkS">0°</output></label>
               </div>
             </div>
             <figcaption data-i18n="bs.c4">How the rig works, simplified. Actuators on the front and rear cross beams shift the middle beam sideways, and its mounts let it turn freely. The bike leans on two pivots at the wheel hub centres, and the centre of mass of the bike is marked with the round symbol. One pivot sits on a slider, because the distance between the pivots changes as the handlebar turns. The middle beam has a fixed length, so it slides over its rear mount: it pokes out most at the rear when it is straight, and less the more it is angled. The balancing shown is an illustration, not the rig's actual control.</figcaption>
@@ -599,14 +601,14 @@ var UI = {
       ch:["Throttle","Brake","Steering","Damper adjustment"],act:"active",ev:["Uneven braking","Aggressive throttle","Jerky steering"],
       spd:"Speed",dist:"Lap distance",
       cl:{thr:"Throttle",eng:"Engine speed",out:"Output speed",at:"engagement speed",s0:"Clutch open",s1:"Slipping",s2:"Fully engaged"},
-      bk:{top:"Seen from above",back:"Seen from behind",fa:"Front actuator",ra:"Rear actuator",sl:"Pivot on slider",lean:"Lean",com:"Centre of mass"},
+      bk:{top:"Seen from above",back:"Seen from behind",fa:"Front actuator",ra:"Rear actuator",sl:"Pivot on slider",lean:"Roll",com:"Centre of mass"},
       tqv:"Drag to rotate · press the switches · turn the dimmer",
       switchTo:"Svenska",aria:"Byt språk till svenska"},
   sv:{email:"Mejla mig",li:"LinkedIn",cv:"Ladda ner CV",todoEmail:"Lägg till din e-postadress",todoLi:"Lägg till din LinkedIn-länk",
       ch:["Gas","Broms","Styrning","Dämparjustering"],act:"aktiv",ev:["Ojämn bromsning","Aggressiv gas","Ryckig styrning"],
       spd:"Fart",dist:"Varvdistans",
       cl:{thr:"Gas",eng:"Motorvarvtal",out:"Utgående varvtal",at:"inkopplingsvarvtal",s0:"Kopplingen öppen",s1:"Slirar",s2:"Fullt inkopplad"},
-      bk:{top:"Sedd uppifrån",back:"Sedd bakifrån",fa:"Främre ställdon",ra:"Bakre ställdon",sl:"Led på släde",lean:"Lutning",com:"Tyngdpunkt"},
+      bk:{top:"Sedd uppifrån",back:"Sedd bakifrån",fa:"Främre ställdon",ra:"Bakre ställdon",sl:"Led på släde",lean:"Roll",com:"Tyngdpunkt"},
       tqv:"Dra för att rotera · tryck på strömbrytarna · vrid på dimmern",
       switchTo:"English",aria:"Switch language to English"}
 };
@@ -845,23 +847,26 @@ function mount(id, draw, still){
 
 /* ---------- go-kart: centrifugal clutch ---------- */
 (function(){
-  var we = 0.28, wd = 0, aE = 0, aD = 0, trav = 0, grip = 0, thr = 0, held = false, lastTouch = -99, locked = false;
+  var we = 0.28, wd = 0, aE = 0, aD = 0, trav = 0, grip = 0, slip = 0, heat = 0, thr = 0, held = false, lastTouch = -99, locked = false;
   var IDLE = 0.28, W0 = 0.42, WE = 0.52, W1 = 0.70;   // shoes start to move at W0, touch the drum at WE (the engagement speed) and grip fully at W1
   function c01(x){ return x < 0 ? 0 : x > 1 ? 1 : x; }
   function step(t, dt){
     var manual = held || (t - lastTouch < 15);                               // the demo waits a long while after the visitor lets go
     var tgt = held ? 1 : 0;
     if (!manual){ var ph = t % 18; tgt = (ph > 3 && ph < 7) ? 0.6 : 0; }
-    thr += Math.max(-dt/0.8, Math.min(dt/1.8, tgt - thr));                    // the throttle travels: about 1.8 s to the floor, 0.8 s back
-    we += (IDLE + (1-IDLE)*thr - we) * Math.min(1, dt*1.7);
+    thr += Math.max(-dt/2.4, Math.min(dt/1.8, tgt - thr));                    // the throttle travels: about 1.8 s to the floor, 2.4 s back
+    var goal = IDLE + (1-IDLE)*thr;
+    we += (goal - we) * Math.min(1, dt*(goal > we ? 3 : 1.1));               // the engine revs up quickly and winds down slowly
     trav = c01((we*we - W0*W0)/(WE*WE - W0*W0));                              // shoe travel until they reach the drum
     grip = c01((we*we - WE*WE)/(W1*W1 - WE*WE));                              // clamping force once they touch
     if (locked){ wd += (we - wd)*Math.min(1, dt*12); if (grip < 0.9) locked = false; }
     else {
-      wd += (5*grip*Math.tanh(10*(we - wd)) - 0.5*wd - (wd > 0 ? 0.3 : 0)) * dt;   // friction torque from the shoes (limited by the clamping force) against drag and a little friction
+      wd += (1.6*grip*Math.tanh(12*(we - wd)) - 0.4*wd - (wd > 0 ? 0.25 : 0)) * dt;   // friction torque from the shoes (limited by the clamping force) against drag and a little friction
       if (wd < 0.004) wd = 0;
-      if (grip > 0.97 && we - wd < 0.03) locked = true;
+      if (grip > 0.97 && we - wd < 0.05) locked = true;
     }
+    slip = (!locked && grip > 0.02) ? c01((we - wd)/Math.max(we, 0.01)) : 0;   // how much slower the drum turns than the engine
+    heat = slip*Math.min(1, grip*4);                                          // friction heat: shows where the shoes rub
     aE += we*dt*6.5; aD += wd*dt*6.5;
   }
   var api = mount("gClutch", function(ctx,W,H,t,dt){
@@ -872,12 +877,14 @@ function mount(id, draw, still){
     ctx.lineCap = "round";
     // drum
     ctx.beginPath(); ctx.arc(cx,cy,(R+Ri)/2,0,6.3); ctx.strokeStyle = locked ? "#6b7480" : "#4a535f"; ctx.lineWidth = R-Ri; ctx.stroke();
+    if (heat > 0.02){ ctx.strokeStyle = "rgba(255,112,48," + (0.5*heat).toFixed(2) + ")"; ctx.stroke(); }
     ctx.strokeStyle = locked ? COL.gold : COL.dim; ctx.lineWidth = 2;
     for (var k=0;k<12;k++){ var a = aD + k*Math.PI/6; ctx.beginPath(); ctx.moveTo(cx+Math.cos(a)*(R+3), cy+Math.sin(a)*(R+3)); ctx.lineTo(cx+Math.cos(a)*(R+9), cy+Math.sin(a)*(R+9)); ctx.stroke(); }
     // shoes and springs
     for (var s=0;s<3;s++){
       var am = aE + s*2.0944, half = 0.86;
       ctx.beginPath(); ctx.arc(cx,cy,ro - th/2, am-half, am+half); ctx.strokeStyle = COL.steel; ctx.lineWidth = th; ctx.lineCap = "butt"; ctx.stroke();
+      if (heat > 0.02){ ctx.beginPath(); ctx.arc(cx,cy,ro - 1.5, am-half, am+half); ctx.strokeStyle = "rgba(255,112,48," + (0.75*heat).toFixed(2) + ")"; ctx.lineWidth = 3 + 7*heat; ctx.stroke(); }
       ctx.beginPath(); ctx.arc(cx,cy,ro - 1.5, am-half, am+half); ctx.strokeStyle = COL.gold; ctx.lineWidth = 3; ctx.stroke();
       var r0 = hub, r1 = ro - th, nz = 7, px = -Math.sin(am), py = Math.cos(am);
       ctx.beginPath(); ctx.moveTo(cx+Math.cos(am)*r0, cy+Math.sin(am)*r0);
@@ -891,7 +898,7 @@ function mount(id, draw, still){
     var bx = wide ? W*0.56 : 18, bw = wide ? W*0.40 : W-36, by = wide ? H*0.20 : H*0.68, rowh = wide ? Math.min(46, H*0.19) : 38;
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "#fff"; ctx.font = "700 " + (wide ? 17 : 15) + "px " + TXT;
-    ctx.fillText(locked ? u.s2 : grip > 0.02 ? u.s1 : u.s0, bx, by - 8);
+    ctx.fillText(locked ? u.s2 : grip > 0.02 ? u.s1 + " \u00b7 " + Math.round(slip*100) + " %" : u.s0, bx, by - 8);
     var rows = [[u.thr, thr, COL.thr],[u.eng, we, COL.steel],[u.out, wd, COL.gold]];
     for (var r=0;r<3;r++){
       var y = by + 22 + r*rowh;
@@ -920,16 +927,17 @@ function mount(id, draw, still){
 (function(){
   if (!document.getElementById("gBike")) return;
   // inverted pendulum on a moving base; y is the sideways position of the beam under the weight
-  var W2 = 9, KA = 38.7, KB = 12.6, KC = 2.25, KD = 4.2, SEAT = 0.36, LEAD = 0.2, TURN = 1.1, DELAY = 0.2, LAG = 0.06;
+  var W2 = 9, KA = 38.7, KB = 12.6, KC = 2.25, KD = 4.2, SEAT = 0.36, LEAD = 0.2, TURN = 1.1, DELAY = 0.12, LAG = 0.06, TS = 1.7;   // TS: the physics runs faster than real time, so the rig reacts quicker
   var th = 0, om = 0, y = 0, v = 0, steer = 0, clock = 0, lastPush = -99, lastSteer = -99, nextAuto = 1.2, dirAuto = 1, hold = -1, ua = 0;
-  var sl = document.getElementById("bkS");
-  function push(dir, k){ om = Math.max(-1, Math.min(1, om + dir*0.7*(k||1))); hold = clock + DELAY; }   // the actuators react a moment late
+  var sl = document.getElementById("bkS"), sv = document.getElementById("bkSv");
+  function showSv(){ var a = Math.round(+sl.value); sv.textContent = (a > 0 ? "+" : a < 0 ? "\u2212" : "") + Math.abs(a) + "\u00b0"; sv.classList.toggle("zero", a === 0); }
+  function push(dir, k){ om = Math.max(-2, Math.min(2, om + dir*1.0*(k||1))); hold = clock + DELAY; }   // the actuators react a moment late
   function step(t, dt){
     clock = t;
     var idle = t - Math.max(lastPush, lastSteer) > 25;                       // after any input from the visitor the demo stays quiet for a long while
     if (idle && t > nextAuto){ push(dirAuto, 0.45); dirAuto = -dirAuto; nextAuto = t + 9; }
-    if (idle){ steer += (20*Math.sin(t*0.4) - steer)*Math.min(1, dt*1.5); sl.value = Math.round(steer); }
-    var n = 4, h = dt/n;
+    if (idle){ steer += (20*Math.sin(t*0.4) - steer)*Math.min(1, dt*1.5); sl.value = Math.round(steer); showSv(); }
+    var n = 4, h = dt*TS/n;
     for (var i=0;i<n;i++){
       var uc = (t < hold) ? 0 : KA*th + KB*om + KC*y + KD*v;
       ua += (uc - ua)*Math.min(1, h/LAG);
@@ -1001,10 +1009,6 @@ function mount(id, draw, still){
     seg([Hp[0]-fy*15, Hp[1]+fx*15], [Hp[0]+fy*15, Hp[1]-fx*15], "#fff", 3.5);   // handlebar
     ctx.lineCap = "butt";
     dot(Rp, 4.5, COL.panel, "#fff"); dot(Fp, 4.5, COL.panel, COL.gold);
-    ctx.fillStyle = COL.gold; ctx.font = "600 12px " + TXT; ctx.textAlign = "center";
-    label(ctx, u.sl, a0 + xr + (dmin+dmax)/2, Math.min(Yr, Yf, cy) - hb*0.52 - 4, ax, ax+aw);
-    ctx.strokeStyle = COL.gold; ctx.lineWidth = 1; ctx.setLineDash([2,4]); ctx.beginPath();
-    ctx.moveTo(Fp[0], Math.min(Yr, Yf, cy) - hb*0.52); ctx.lineTo(Fp[0], Fp[1] - 9); ctx.stroke(); ctx.setLineDash([]);
 
     /* ----- from behind: the same geometry projected sideways, far parts dimmer ----- */
     var gy = by + bh*0.80, mx = bx + bw/2, hw = bw/2 - 22, S2 = hw*0.5, py = gy - 30, k2 = S2/S;
@@ -1042,14 +1046,10 @@ function mount(id, draw, still){
     cm.forEach(function(q){ mT += q[0]; aC += q[0]*q[1]; oC += q[0]*q[2]; zC += q[0]*q[3]; });
     aC /= mT; oC /= mT; zC /= mT;
     var wp = B(aC, oC, zC);
-    ctx.strokeStyle = COL.gold; ctx.lineWidth = 1; ctx.setLineDash([2,3]); ctx.beginPath(); ctx.moveTo(wp[0], wp[1]); ctx.lineTo(wp[0], py); ctx.stroke(); ctx.setLineDash([]);   // straight down to the pivot line
     com(ctx, wp, 8);
-    ctx.fillStyle = COL.gold; ctx.font = "600 12px " + TXT; ctx.textBaseline = "middle";
-    var tw = ctx.measureText(u.com).width, flip = wp[0] + 15 + tw > bx + bw - 6;
-    ctx.textAlign = flip ? "right" : "left"; ctx.fillText(u.com, wp[0] + (flip ? -15 : 15), wp[1]);
     if (Math.abs(th) > 0.012){ ctx.beginPath(); ctx.arc(Rb[0], py, L*0.86, -Math.PI/2, -Math.PI/2 + th, th < 0); ctx.strokeStyle = COL.gold; ctx.lineWidth = 1.5; ctx.stroke(); }
     var Ct = P(aC, (oC*cT + zC*sT)/k2);                                      // the same point seen from above: the lean carries it sideways
-    com(ctx, Ct, 6.5); ctx.fillStyle = COL.gold; ctx.font = "600 12px " + TXT; ctx.textBaseline = "alphabetic"; label(ctx, u.com, Ct[0], Ct[1] - 13, ax, ax+aw);
+    com(ctx, Ct, 6.5);
     ctx.fillStyle = "#fff"; ctx.font = "600 13px " + TXT; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
     ctx.fillText(u.lean + " " + Math.abs(th*180/Math.PI).toFixed(1).replace(".", lang === "sv" ? "," : ".") + "°", bx + 16, gy + 34);
   }, 0);
@@ -1057,8 +1057,9 @@ function mount(id, draw, still){
   function onPush(dir){ lastPush = clock; if (REDUCE){ still(dir); api.redraw(); } else push(dir); }
   document.getElementById("bkL").addEventListener("click", function(){ onPush(-1); });
   document.getElementById("bkR").addEventListener("click", function(){ onPush(1); });
-  sl.addEventListener("input", function(){ steer = +sl.value; lastSteer = REDUCE ? 1e9 : clock; if (REDUCE) api.redraw(); });
-  if (REDUCE){ still(1); steer = 30; sl.value = 30; api.redraw(); }
+  sl.addEventListener("input", function(){ steer = +sl.value; showSv(); lastSteer = REDUCE ? 1e9 : clock; if (REDUCE) api.redraw(); });
+  showSv();
+  if (REDUCE){ still(1); steer = 30; sl.value = 30; showSv(); api.redraw(); }
 })();
 
 /* ---------- bachelor's thesis: bent screw ---------- */

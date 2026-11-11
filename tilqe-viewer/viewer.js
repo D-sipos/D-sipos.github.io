@@ -98,11 +98,12 @@
     var isGL2 = (typeof WebGL2RenderingContext !== 'undefined') && gl instanceof WebGL2RenderingContext;
     var man = null, prog = null, U = {}, lutTex = null;
     var blobs = {}, loaded = [], texCache = {}, decoding = {}, nDecoding = 0, clock = 0;
-    var pos = 0, vel = 0, dragging = false, settleTo = null;
+    var pos = 0, tpos = 0, vel = 0, holdT = 0, dragging = false, settleTo = null, freeTex = [];
+    var MAXV = 0.08;     // fastest the picture may turn: frames per millisecond
     var sw = [1, 1], dim = 1, lastDim = 1;      // targets
     var cur = [1, 1, 1];                         // animated: dimmer, L, R
     var lastPair = null, raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
-    var MAXTEX = 18, csW = 0, ovI = -1, ovInit = false;
+    var MAXTEX = 20, csW = 0, ovI = -1, ovInit = false;
 
     function compile(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
     function initGL() {
@@ -126,8 +127,10 @@
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
       gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     }
-    function makeTex(src, mip) {
-      var t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    function makeTex(src, mip, reuse) {
+      var t = reuse && freeTex.length ? freeTex.pop() : null;
+      if (t) { gl.bindTexture(gl.TEXTURE_2D, t); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, src); return t; }
+      t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -143,17 +146,22 @@
     }
     function wantTex(i) {
       if (texCache[i]) { texCache[i].t = ++clock; return texCache[i].tex; }
-      if (!decoding[i] && blobs[i] && nDecoding < 4) {
+      if (!decoding[i] && blobs[i] && nDecoding < 5) {
         decoding[i] = true; nDecoding++;
         decodeBlob(blobs[i]).then(function (bm) {
           delete decoding[i]; nDecoding--;
           if (gl.isContextLost()) return;
-          texCache[i] = { tex: makeTex(bm, false), t: ++clock };
+          texCache[i] = { tex: makeTex(bm, false, true), t: ++clock };
           if (bm.close) bm.close();
           evict(); kick();
         }, function () { delete decoding[i]; nDecoding--; });
       }
       return null;
+    }
+    function ready(p) {
+      if (!loaded.length) return true;
+      var w = pair(p), a = !!wantTex(w.a), b = w.b === w.a ? a : !!wantTex(w.b);
+      return a && b;
     }
     function evict() {
       var keys = Object.keys(texCache);
@@ -162,7 +170,8 @@
       for (var j = 0; j < keys.length - MAXTEX; j++) {
         var k = +keys[j];
         if (lastPair && (k === lastPair.a || k === lastPair.b)) continue;
-        gl.deleteTexture(texCache[k].tex); delete texCache[k];
+        if (freeTex.length < 3) freeTex.push(texCache[k].tex); else gl.deleteTexture(texCache[k].tex);
+        delete texCache[k];
       }
     }
     function pair(p) {
@@ -203,8 +212,8 @@
       if (!p) return;
       lastPair = p;
       // prefetch in the direction of travel
-      var dir = vel >= 0 ? 1 : -1, idx = loaded.indexOf(dir > 0 ? want.b : want.a);
-      for (var s = 1; s <= 4 && idx >= 0; s++) { var q = loaded[idx + dir * s]; if (q !== undefined) wantTex(q); }
+      var dir = (tpos !== pos ? tpos > pos : vel >= 0) ? 1 : -1, idx = loaded.indexOf(dir > 0 ? want.b : want.a);
+      for (var s = 1; s <= 6 && idx >= 0; s++) { var q = loaded[idx + dir * s]; if (q !== undefined) wantTex(q); }
       resize();
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCache[p.a].tex);
@@ -253,16 +262,26 @@
       var busy = false, lim = loaded.length ? [loaded[0], loaded[loaded.length - 1]] : [0, 0];
       if (!dragging) {
         if (Math.abs(vel) > 0.004) {
-          pos += vel * dt; vel *= Math.exp(-dt / 300); busy = true;
-          if (pos < lim[0]) { pos = lim[0]; vel = 0; } if (pos > lim[1]) { pos = lim[1]; vel = 0; }
+          tpos += vel * dt; vel *= Math.exp(-dt / 300); busy = true;
+          if (tpos < lim[0]) { tpos = lim[0]; vel = 0; } if (tpos > lim[1]) { tpos = lim[1]; vel = 0; }
           settleTo = null;
         } else {
           vel = 0;
-          if (settleTo === null) settleTo = Math.round(pos);
-          var d = settleTo - pos;
-          if (Math.abs(d) > 0.003) { pos += d * (1 - Math.exp(-dt / 110)); busy = true; } else pos = settleTo;
+          if (settleTo === null) settleTo = Math.round(tpos);
+          tpos = settleTo;
         }
       }
+      // the picture glides after the target at a limited speed and only moves on once the next frames are ready,
+      // so the motion stays continuous even when the decoding cannot keep up with a fast drag
+      var dp = tpos - pos;
+      if (Math.abs(dp) > 0.003) {
+        var stp = dp * (1 - Math.exp(-dt / (dragging ? 35 : 80))), mx = MAXV * dt;
+        stp = stp > mx ? mx : stp < -mx ? -mx : stp;
+        if (!dt) stp = 0;
+        var np = pos + stp;
+        if (ready(np) || (holdT += dt) > 250) { pos = np; holdT = 0; }
+        busy = true;
+      } else pos = tpos;
       var tg = [dim, sw[0], sw[1]];
       for (var j = 0; j < 3; j++) {
         var e = tg[j] - cur[j];
@@ -309,7 +328,7 @@
       sx = lastX = ev.clientX; sy = ev.clientY; sPos = pos; sDim = dim; moved = 0; lastMT = ev.timeStamp;
       var h = hit(ev);
       if (h === 'knob') mode = 'knob';
-      else { mode = 'rotate'; pend = h; dragging = true; vel = 0; settleTo = null; }
+      else { mode = 'rotate'; pend = h; dragging = true; vel = 0; settleTo = null; tpos = pos; }
       canvas.style.cursor = mode === 'knob' ? 'ew-resize' : 'grabbing';
       kick();
     });
@@ -332,7 +351,7 @@
         np = Math.max(lim[0], Math.min(lim[1], np));
         var dtm = Math.max(1, ev.timeStamp - lastMT);
         vel = 0.6 * vel + 0.4 * (-(ev.clientX - lastX) * fpp / dtm);
-        lastX = ev.clientX; lastMT = ev.timeStamp; pos = np;
+        lastX = ev.clientX; lastMT = ev.timeStamp; tpos = np;
       }
       kick();
     });
@@ -357,7 +376,7 @@
       else ok = false;
       if (ok) { ev.preventDefault(); vel = 0; kick(); }
     });
-    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; lastPair = null; prog = null; });
+    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; freeTex = []; lastPair = null; prog = null; });
     canvas.addEventListener('webglcontextrestored', function () { boot(); });
     if (window.ResizeObserver) new ResizeObserver(function () { csW = 0; if (man) kick(); }).observe(el);
     else window.addEventListener('resize', function () { csW = 0; if (man) kick(); });
@@ -396,7 +415,7 @@
     function start() {
       if (started) return; started = true;
       fetch(base + 'manifest.json').then(function (r) { return r.json(); }).then(function (m) {
-        man = m; pos = m.home; canvas.style.cursor = 'grab';
+        man = m; pos = tpos = m.home; canvas.style.cursor = 'grab';
         boot(); loadFrames();
       }).catch(function (e) { if (window.console) console.error('TILQE viewer:', e); });
     }
@@ -404,6 +423,8 @@
       var io = new IntersectionObserver(function (en) { if (en[0].isIntersecting) { io.disconnect(); start(); } }, { rootMargin: '300px' });
       io.observe(el);
     } else start();
+    var idleStart = function () { (window.requestIdleCallback || function (f) { setTimeout(f, 1200); })(start); };
+    if (document.readyState === 'complete') idleStart(); else window.addEventListener('load', idleStart);
     return { el: el };
   }
 
