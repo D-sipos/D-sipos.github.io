@@ -99,7 +99,7 @@
     var man = null, prog = null, U = {}, lutTex = null;
     var blobs = {}, loaded = [], texCache = {}, decoding = {}, nDecoding = 0, clock = 0;
     var pos = 0, tpos = 0, vel = 0, holdT = 0, dragging = false, settleTo = null, freeTex = [];
-    var MAXV = 0.3;     // fastest the picture may turn: frames per millisecond
+    var MAXV = 0.2;     // fastest the picture may turn: frames per millisecond
     var sw = [1, 1], dim = 1, lastDim = 1;      // targets
     var cur = [1, 1, 1];                         // animated: dimmer, L, R
     var lastPair = null, raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
@@ -275,11 +275,11 @@
       // so the motion stays continuous even when the decoding cannot keep up with a fast drag
       var dp = tpos - pos;
       if (Math.abs(dp) > 0.003) {
-        var stp = dp * (1 - Math.exp(-dt / (dragging ? 12 : 60))), mx = MAXV * dt;
+        var stp = dp * (1 - Math.exp(-dt / (dragging ? 7 : 45))), mx = MAXV * dt;
         stp = stp > mx ? mx : stp < -mx ? -mx : stp;
         if (!dt) stp = 0;
         var np = pos + stp;
-        if (ready(np) || (holdT += dt) > 70) { pos = np; holdT = 0; }
+        if (ready(np) || (holdT += dt) > 35) { pos = np; holdT = 0; }
         busy = true;
       } else pos = tpos;
       var tg = [dim, sw[0], sw[1]];
