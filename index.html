@@ -690,7 +690,7 @@ document.addEventListener("keydown", function(e){ if (e.key === "Escape" && lb.c
     var th = 1 - ss(1.9,2.2,u) + ss(5.2,7.0,u);
     var s = Math.sin(Math.PI*clamp((u-3.4)/3.4)); s = s*s*0.8*dir;
     var e = -1;
-    if (k === 1){ b *= 1 + 0.42*Math.sin(2*Math.PI*1.9*(u-2.2)); if (u > 2.9 && u < 4.7) e = 0; }
+    if (k === 1){ b *= 1 + 0.42*Math.sin(2*Math.PI*1.9*(u-2.2)); if (u > 3.12 && u < 4.7) e = 0; }
     if (k === 2){ th = 1 - ss(1.9,2.2,u) + ss(5.2,5.32,u); if (u > 5.3 && u < 6.8) e = 1; }
     if (k === 3){ s += 0.16*Math.sin(2*Math.PI*2.6*u)*ss(3.4,3.8,u)*(1-ss(6.2,6.8,u)); if (u > 4.0 && u < 6.8) e = 2; }
     thr[i] = clamp(th); brk[i] = clamp(b); str[i] = s; evt[i] = e;
