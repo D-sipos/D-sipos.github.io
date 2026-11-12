@@ -1,4 +1,4 @@
-/* TILQE 3-gang interactive viewer.
+/* TILQE 3-gang interactive viewer, 2D orbit (azimuth + elevation).
    Pre-rendered Cycles frames stored as separate light passes; the page re-lights them live.
    Usage:  <div data-tilqe-viewer></div> <script src="tilqe-viewer/viewer.js"></script>
    Options (data attributes): data-zoom="1.25"  data-hint="Drag to rotate ..."  data-base="path/to/tilqe-viewer/" */
@@ -10,6 +10,7 @@
     '.tqv>img,.tqv>canvas,.tqv>svg{position:absolute;inset:0;width:100%;height:100%;display:block}' +
     '.tqv>img{object-fit:cover}' +
     '.tqv>canvas{touch-action:pan-y;outline:none;opacity:0;transition:opacity .35s}' +
+    '@media (pointer:fine){.tqv>canvas{touch-action:none}}' +
     '.tqv.tqv-live>canvas{opacity:1}' +
     '.tqv>canvas:focus-visible{box-shadow:inset 0 0 0 2px rgba(243,227,192,.7)}' +
     '.tqv>svg{pointer-events:none}' +
@@ -21,16 +22,20 @@
     '.tqv-used .tqv-hint{opacity:0}' +
     '.tqv-bar{position:absolute;left:0;bottom:0;height:2px;width:0;background:rgba(243,227,192,.55);transition:width .2s,opacity .6s}' +
     '.tqv-bar.done{opacity:0}' +
+    '.tqv-tilt{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:none;flex-direction:column;gap:8px}' +
+    '@media (pointer:coarse){.tqv-tilt{display:flex}}' +
+    '.tqv-tilt button{all:unset;box-sizing:border-box;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:13px;color:rgba(255,246,228,.9);background:rgba(20,18,14,.45);border:1px solid rgba(255,246,228,.28);cursor:pointer;touch-action:manipulation}' +
+    '.tqv-tilt button:active{background:rgba(243,227,192,.35)}' +
     '@media (prefers-reduced-motion:reduce){.tqv-pulse{animation:none;opacity:.6}}';
 
   var VS = 'attribute vec2 aPos;uniform float uZoom;varying vec2 vUv;void main(){vUv=vec2(aPos.x,-aPos.y)*0.5/uZoom+0.5;gl_Position=vec4(aPos,0.0,1.0);}';
   var FS = [
     'precision highp float;',
     'varying vec2 vUv;',
-    'uniform sampler2D uA,uB,uLut;',
-    'uniform float uMix,uState,uPerRow,uLK,uK;',
-    'uniform vec4 uWt,uMaxv;',
-    'uniform vec2 uRectA,uRectB,uFrame,uAtlas,uCell;',
+    'uniform sampler2D uA,uB,uC,uD,uLut;',
+    'uniform float uState,uPerRow,uLK,uK;',
+    'uniform vec4 uWt,uMaxv,uBw;',
+    'uniform vec2 uRectA,uRectB,uRectC,uRectD,uFrame,uAtlas,uCell;',
     'uniform vec3 uLutP;',
     'vec3 dec(vec3 p,float m){return (exp(p*uLK)-1.0)*(m/uK);}',
     'vec3 shade(sampler2D t,vec2 rect){',
@@ -66,11 +71,17 @@
     '}',
     'float hash(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}',
     'void main(){',
-    '  vec3 lin=shade(uA,uRectA);',
-    '  if(uMix>0.001)lin=mix(lin,shade(uB,uRectB),uMix);',
+    '  vec3 lin=vec3(0.0);',
+    '  if(uBw.x>0.0)lin+=uBw.x*shade(uA,uRectA);',
+    '  if(uBw.y>0.0)lin+=uBw.y*shade(uB,uRectB);',
+    '  if(uBw.z>0.0)lin+=uBw.z*shade(uC,uRectC);',
+    '  if(uBw.w>0.0)lin+=uBw.w*shade(uD,uRectD);',
     '  vec3 c=tm(lin)+(hash(gl_FragCoord.xy)-0.5)/255.0;',
     '  gl_FragColor=vec4(c,1.0);',
     '}'].join('\n');
+
+  // load stages, coarse to fine: [azimuth stride, elevation stride] in grid nodes (the home node is in every stage)
+  var STAGES = [[16, 4], [8, 2], [4, 1], [2, 1], [1, 1]];
 
   function mount(el, opts) {
     opts = opts || {};
@@ -81,11 +92,12 @@
       var st = document.createElement('style'); st.id = 'tqv-css'; st.textContent = CSS; document.head.appendChild(st);
     }
     el.classList.add('tqv');
-    el.innerHTML = '<img alt="" src="' + base + 'poster.webp"><canvas tabindex="0" role="img" aria-label="TILQE 3-gang brass plate with dimmer, double switch and socket. Drag or use arrow keys to rotate; keys 1 and 2 press the switches; up and down turn the dimmer."></canvas>' +
+    el.innerHTML = '<img alt="" src="' + base + 'poster.webp"><canvas tabindex="0" role="img" aria-label="TILQE 3-gang brass plate with dimmer, double switch and socket. Drag or use the arrow keys to rotate; keys 1 and 2 press the switches; plus and minus turn the dimmer."></canvas>' +
       '<svg xmlns="http://www.w3.org/2000/svg"><g class="tqv-g"><circle class="tqv-pulse"/><circle class="tqv-pulse"/><circle class="tqv-pulse"/>' +
       '<g class="tqv-ring"><path fill="none" stroke="rgba(255,255,255,.22)" stroke-width="2.4" stroke-linecap="round"/><path fill="none" stroke="#f6e7c6" stroke-width="2.4" stroke-linecap="round"/>' +
       '<text text-anchor="middle" fill="#f6e7c6" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="600"></text></g></g></svg>' +
-      '<div class="tqv-hint"></div><div class="tqv-bar"></div>';
+      '<div class="tqv-hint"></div><div class="tqv-bar"></div>' +
+      '<div class="tqv-tilt"><button type="button" data-d="1" aria-label="Look from higher up">&#9650;</button><button type="button" data-d="-1" aria-label="Look from lower down">&#9660;</button></div>';
     var canvas = el.querySelector('canvas'), svg = el.querySelector('svg'), gEl = el.querySelector('.tqv-g');
     var pulses = el.querySelectorAll('.tqv-pulse'), ring = el.querySelector('.tqv-ring');
     var ringBg = ring.children[0], ringFg = ring.children[1], ringTx = ring.children[2];
@@ -95,16 +107,19 @@
 
     var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' }) || canvas.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'high-performance' });
     if (!gl) return;
-    var isGL2 = (typeof WebGL2RenderingContext !== 'undefined') && gl instanceof WebGL2RenderingContext;
     var man = null, prog = null, U = {}, lutTex = null;
-    var blobs = {}, loaded = [], texCache = {}, decoding = {}, nDecoding = 0, clock = 0;
-    var pos = 0, tpos = 0, vel = 0, holdT = 0, dragging = false, settleTo = null, freeTex = [];
-    var MAXV = 0.2;     // fastest the picture may turn: frames per millisecond
+    var NX = 0, NY = 0, HX = 0, HY = 0, AXs = [], AEs = [], avail = {};
+    var blobs = {}, nstate = {}, queue = [], active = 0, bGot = 0, bTot = 0, sched = -1, pendStage = -1;
+    var texCache = {}, decoding = {}, nDecoding = 0, clock = 0, freeTex = [], lastSet = [];
+    var px = 0, py = 0, tx = 0, ty = 0, vx = 0, vy = 0, holdT = 0, dragging = false, settle = null;   // position and target in grid nodes (x: azimuth, y: elevation)
+    var MAXA = 0.1, MAXE = 0.067;     // fastest the picture may turn: nodes per millisecond (about 200 degrees per second)
     var sw = [1, 1], dim = 1, lastDim = 1;      // targets
     var cur = [1, 1, 1];                         // animated: dimmer, L, R
-    var lastPair = null, raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
+    var raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
     var MAXTEX = 20, csW = 0, ovI = -1, ovInit = false;
+    var LET = 'ABCD';
 
+    function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
     function compile(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
     function initGL() {
       prog = gl.createProgram();
@@ -115,8 +130,8 @@
       var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
       var loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      ['uA', 'uB', 'uLut', 'uMix', 'uState', 'uPerRow', 'uLK', 'uK', 'uWt', 'uMaxv', 'uRectA', 'uRectB', 'uFrame', 'uAtlas', 'uCell', 'uLutP', 'uZoom'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
-      gl.uniform1i(U.uA, 0); gl.uniform1i(U.uB, 1); gl.uniform1i(U.uLut, 2);
+      ['uA', 'uB', 'uC', 'uD', 'uLut', 'uState', 'uPerRow', 'uLK', 'uK', 'uWt', 'uMaxv', 'uBw', 'uRectA', 'uRectB', 'uRectC', 'uRectD', 'uFrame', 'uAtlas', 'uCell', 'uLutP', 'uZoom'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+      gl.uniform1i(U.uA, 0); gl.uniform1i(U.uB, 1); gl.uniform1i(U.uC, 2); gl.uniform1i(U.uD, 3); gl.uniform1i(U.uLut, 4);
       gl.uniform1f(U.uZoom, zoom);
       gl.uniform2f(U.uFrame, man.w, man.h); gl.uniform2f(U.uAtlas, man.atlas[0], man.atlas[1]);
       gl.uniform2f(U.uCell, man.patch.cw, man.patch.ch); gl.uniform1f(U.uPerRow, man.patch.perRow);
@@ -127,15 +142,13 @@
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
       gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     }
-    function makeTex(src, mip, reuse) {
+    function makeTex(src, reuse) {
       var t = reuse && freeTex.length ? freeTex.pop() : null;
       if (t) { gl.bindTexture(gl.TEXTURE_2D, t); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, src); return t; }
       t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      if (mip && isGL2) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); }
-      else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       return t;
     }
     function decodeBlob(blob) {
@@ -144,24 +157,19 @@
       }
       return new Promise(function (res, rej) { var im = new Image(); im.onload = function () { res(im); }; im.onerror = rej; im.src = URL.createObjectURL(blob); });
     }
-    function wantTex(i) {
-      if (texCache[i]) { texCache[i].t = ++clock; return texCache[i].tex; }
-      if (!decoding[i] && blobs[i] && nDecoding < 5) {
-        decoding[i] = true; nDecoding++;
-        decodeBlob(blobs[i]).then(function (bm) {
-          delete decoding[i]; nDecoding--;
+    function wantTex(n) {
+      if (texCache[n]) { texCache[n].t = ++clock; return texCache[n].tex; }
+      if (!decoding[n] && blobs[n] && nDecoding < 5) {
+        decoding[n] = true; nDecoding++;
+        decodeBlob(blobs[n]).then(function (bm) {
+          delete decoding[n]; nDecoding--;
           if (gl.isContextLost()) return;
-          texCache[i] = { tex: makeTex(bm, false, true), t: ++clock };
+          texCache[n] = { tex: makeTex(bm, true), t: ++clock };
           if (bm.close) bm.close();
           evict(); kick();
-        }, function () { delete decoding[i]; nDecoding--; });
+        }, function () { delete decoding[n]; nDecoding--; });
       }
       return null;
-    }
-    function ready(p) {
-      if (!loaded.length) return true;
-      var w = pair(p), a = !!wantTex(w.a), b = w.b === w.a ? a : !!wantTex(w.b);
-      return a && b;
     }
     function evict() {
       var keys = Object.keys(texCache);
@@ -169,17 +177,39 @@
       keys.sort(function (a, b) { return texCache[a].t - texCache[b].t; });
       for (var j = 0; j < keys.length - MAXTEX; j++) {
         var k = +keys[j];
-        if (lastPair && (k === lastPair.a || k === lastPair.b)) continue;
+        if (lastSet.indexOf(k) >= 0) continue;
         if (freeTex.length < 3) freeTex.push(texCache[k].tex); else gl.deleteTexture(texCache[k].tex);
         delete texCache[k];
       }
     }
-    function pair(p) {
-      // nearest loaded frames below / above p
-      var lo = -1, hi = -1;
-      for (var j = 0; j < loaded.length; j++) { var f = loaded[j]; if (f <= p) lo = f; if (f >= p && hi < 0) hi = f; }
-      if (lo < 0) lo = hi; if (hi < 0) hi = lo;
-      return { a: lo, b: hi, mix: hi > lo ? (p - lo) / (hi - lo) : 0 };
+
+    // ---------- the grid: azimuth nodes 0..NX-1 (2 deg), elevation nodes 0..NY-1 (3 deg) ----------
+    function axisSet(len, home, s) {
+      var o = [];
+      for (var j = 0; j < len; j++) if ((((j - home) % s) + s) % s === 0 || j === 0 || j === len - 1) o.push(j);
+      return o;
+    }
+    function bracket(arr, v) {
+      var lo = arr[0], hi = arr[arr.length - 1];
+      for (var j = 0; j < arr.length; j++) { var f = arr[j]; if (f <= v) lo = f; if (f >= v) { hi = f; break; } }
+      return [lo, hi];
+    }
+    // the four surrounding nodes at the finest stage whose nodes are all there (fetched, or decoded when needTex)
+    function find(x, y, needTex) {
+      for (var s = STAGES.length - 1; s >= 0; s--) {
+        var a = bracket(AXs[s], x), e = bracket(AEs[s], y);
+        var ns = [e[0] * NX + a[0], e[0] * NX + a[1], e[1] * NX + a[0], e[1] * NX + a[1]], ok = true;
+        for (var j = 0; j < 4; j++) if (!(needTex ? texCache[ns[j]] : blobs[ns[j]])) { ok = false; break; }
+        if (ok) return { n: ns, wx: a[1] > a[0] ? (x - a[0]) / (a[1] - a[0]) : 0, wy: e[1] > e[0] ? (y - e[0]) / (e[1] - e[0]) : 0 };
+      }
+      return null;
+    }
+    function ready(x, y) {
+      var w = find(x, y, false);
+      if (!w) return true;
+      var ok = true;
+      for (var j = 0; j < 4; j++) if (!wantTex(w.n[j])) ok = false;
+      return ok;
     }
     function weights() {
       var c = [cur[0] * cur[0], cur[1], cur[2]], m = 0.5;   // m: how much each control also dims the shared light
@@ -197,37 +227,50 @@
       var h = Math.round(w * man.h / man.w);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     }
+    function bumpAround(x, y) {
+      var x0 = Math.floor(x), x1 = Math.ceil(x), y0 = Math.floor(y), y1 = Math.ceil(y);
+      bump(y0 * NX + x0); bump(y0 * NX + x1); bump(y1 * NX + x0); bump(y1 * NX + x1);
+    }
     function draw() {
       if (!prog || gl.isContextLost()) return;
-      var want = pair(pos), ta = wantTex(want.a), tb = want.b === want.a ? ta : wantTex(want.b), p = null;
-      if (ta && tb) p = want;
-      else if (ta) p = { a: want.a, b: want.a, mix: 0 };
-      else if (tb) p = { a: want.b, b: want.b, mix: 0 };
-      else {
-        var nc = null, bd = 1e9;                       // show the closest frame we already have instead of freezing
-        for (var kk in texCache) { var dd = Math.abs(+kk - pos); if (dd < bd) { bd = dd; nc = +kk; } }
-        if (nc !== null) p = { a: nc, b: nc, mix: 0 };
-        else if (lastPair && texCache[lastPair.a] && texCache[lastPair.b]) p = lastPair;
+      bumpAround(px, py);
+      var want = find(px, py, false), set = null, j;
+      if (want) { var all = true; for (j = 0; j < 4; j++) if (!wantTex(want.n[j])) all = false; if (all) set = want; }
+      if (!set) set = find(px, py, true);
+      if (!set) {                                      // show the closest node we already have instead of freezing
+        var nc = -1, bd = 1e9;
+        for (var kk in texCache) { var n = +kk, d = Math.hypot((n % NX) - px, (Math.floor(n / NX) - py) * 1.5); if (d < bd) { bd = d; nc = n; } }
+        if (nc >= 0) set = { n: [nc, nc, nc, nc], wx: 0, wy: 0 };
       }
-      if (!p) return;
-      lastPair = p;
-      // prefetch in the direction of travel
-      var dir = (tpos !== pos ? tpos > pos : vel >= 0) ? 1 : -1, idx = loaded.indexOf(dir > 0 ? want.b : want.a);
-      for (var s = 1; s <= 8 && idx >= 0; s++) { var q = loaded[idx + dir * s]; if (q !== undefined) wantTex(q); }
+      if (!set) return;
+      lastSet = set.n;
+      // fetch and decode ahead, along the way to the target
+      var ddx = tx - px, ddy = ty - py, dl = Math.hypot(ddx, ddy);
+      if (dl > 0.01) {
+        var steps = Math.min(6, Math.ceil(dl));
+        for (var s = 1; s <= steps; s++) {
+          var qx = px + ddx * s / steps, qy = py + ddy * s / steps;
+          bumpAround(qx, qy);
+          if (s <= 3) { var q = find(qx, qy, false); if (q) for (j = 0; j < 4; j++) wantTex(q.n[j]); }
+        }
+      }
       resize();
       gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCache[p.a].tex);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texCache[p.b].tex);
-      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, lutTex);
+      for (j = 0; j < 4; j++) { gl.activeTexture(gl.TEXTURE0 + j); gl.bindTexture(gl.TEXTURE_2D, texCache[set.n[j]].tex); }
+      gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, lutTex);
+      var bw = [(1 - set.wx) * (1 - set.wy), set.wx * (1 - set.wy), (1 - set.wx) * set.wy, set.wx * set.wy], sum = 0;
+      for (j = 0; j < 4; j++) { if (bw[j] < 0.003) bw[j] = 0; sum += bw[j]; }
+      for (j = 0; j < 4; j++) bw[j] /= sum;
       var w = weights(), R = man.patch.rects;
       gl.uniform4f(U.uWt, w[0], w[1], w[2], w[3]);
-      gl.uniform1f(U.uMix, p.mix); gl.uniform1f(U.uState, stateIndex());
-      gl.uniform2f(U.uRectA, R[p.a][0], R[p.a][1]); gl.uniform2f(U.uRectB, R[p.b][0], R[p.b][1]);
+      gl.uniform4f(U.uBw, bw[0], bw[1], bw[2], bw[3]);
+      gl.uniform1f(U.uState, stateIndex());
+      for (j = 0; j < 4; j++) gl.uniform2f(U['uRect' + LET.charAt(j)], R[set.n[j]][0], R[set.n[j]][1]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       if (!live) { live = true; el.classList.add('tqv-live'); }
       overlay();
     }
-    function gi() { return Math.max(0, Math.min(man.n - 1, Math.round(pos))); }
+    function gi() { return clamp(Math.round(py), 0, NY - 1) * NX + clamp(Math.round(px), 0, NX - 1); }
     function arc(cx, cy, r, a0, a1) {
       var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
       return 'M' + x0.toFixed(1) + ' ' + y0.toFixed(1) + 'A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 ' + (a1 - a0 > Math.PI ? 1 : 0) + ' 1 ' + x1.toFixed(1) + ' ' + y1.toFixed(1);
@@ -259,29 +302,30 @@
     function tick(t) {
       raf = 0;
       var dt = Math.min(50, t - (lastT || t)); lastT = t;
-      var busy = false, lim = loaded.length ? [loaded[0], loaded[loaded.length - 1]] : [0, 0];
+      var busy = false;
       if (!dragging) {
-        if (Math.abs(vel) > 0.004) {
-          tpos += vel * dt; vel *= Math.exp(-dt / 300); busy = true;
-          if (tpos < lim[0]) { tpos = lim[0]; vel = 0; } if (tpos > lim[1]) { tpos = lim[1]; vel = 0; }
-          settleTo = null;
+        if (Math.abs(vx) > 0.002 || Math.abs(vy) > 0.003) {
+          tx += vx * dt; ty += vy * dt; var dk = Math.exp(-dt / 300); vx *= dk; vy *= dk; busy = true;
+          if (tx < 0) { tx = 0; vx = 0; } if (tx > NX - 1) { tx = NX - 1; vx = 0; }
+          if (ty < 0) { ty = 0; vy = 0; } if (ty > NY - 1) { ty = NY - 1; vy = 0; }
+          settle = null;
         } else {
-          vel = 0;
-          if (settleTo === null) settleTo = Math.round(tpos);
-          tpos = settleTo;
+          vx = vy = 0;
+          if (settle === null) settle = [Math.round(tx), Math.round(ty)];
+          tx = settle[0]; ty = settle[1];
         }
       }
       // the picture glides after the target at a limited speed and only moves on once the next frames are ready,
       // so the motion stays continuous even when the decoding cannot keep up with a fast drag
-      var dp = tpos - pos;
-      if (Math.abs(dp) > 0.003) {
-        var stp = dp * (1 - Math.exp(-dt / (dragging ? 7 : 45))), mx = MAXV * dt;
-        stp = stp > mx ? mx : stp < -mx ? -mx : stp;
-        if (!dt) stp = 0;
-        var np = pos + stp;
-        if (ready(np) || (holdT += dt) > 35) { pos = np; holdT = 0; }
+      var dx = tx - px, dy = ty - py;
+      if (Math.abs(dx) > 0.003 || Math.abs(dy) > 0.003) {
+        var kf = 1 - Math.exp(-dt / (dragging ? 7 : 45)), sx = dx * kf, sy = dy * kf, mx = MAXA * dt, my = MAXE * dt;
+        sx = sx > mx ? mx : sx < -mx ? -mx : sx; sy = sy > my ? my : sy < -my ? -my : sy;
+        if (!dt) { sx = 0; sy = 0; }
+        var nx = px + sx, ny = py + sy;
+        if (ready(nx, ny) || (holdT += dt) > 35) { px = nx; py = ny; holdT = 0; }
         busy = true;
-      } else pos = tpos;
+      } else { px = tx; py = ty; }
       var tg = [dim, sw[0], sw[1]];
       for (var j = 0; j < 3; j++) {
         var e = tg[j] - cur[j];
@@ -294,7 +338,7 @@
     function kick() { if (!raf) raf = requestAnimationFrame(tick); }
 
     // ---------- interaction ----------
-    var mode = null, pid = null, sx = 0, sy = 0, sPos = 0, sDim = 0, moved = 0, pend = null, lastX = 0, lastMT = 0;
+    var mode = null, pid = null, sx0 = 0, sy0 = 0, sPx = 0, sPy = 0, sDim = 0, moved = 0, pend = null, lastX = 0, lastY = 0, lastMT = 0;
     function toFrame(ev) {
       var r = canvas.getBoundingClientRect();
       return [(((ev.clientX - r.left) / r.width - 0.5) / zoom + 0.5) * man.w, (((ev.clientY - r.top) / r.height - 0.5) / zoom + 0.5) * man.h, r.width];
@@ -312,8 +356,8 @@
     function hit(ev) {
       var p = toFrame(ev), i = gi(), g = man.geom, k = g.knob[i];
       var ax = k[0] * man.w, ay = k[1] * man.h, bx = k[2] * man.w, by = k[3] * man.h;
-      var vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy, tt = l2 ? Math.max(0, Math.min(1, ((p[0] - ax) * vx + (p[1] - ay) * vy) / l2)) : 0;
-      var dx = p[0] - ax - tt * vx, dy = p[1] - ay - tt * vy, pad = Math.max(k[4] * man.h + 5, 16 * man.w / p[2] / zoom);
+      var vx2 = bx - ax, vy2 = by - ay, l2 = vx2 * vx2 + vy2 * vy2, tt = l2 ? Math.max(0, Math.min(1, ((p[0] - ax) * vx2 + (p[1] - ay) * vy2) / l2)) : 0;
+      var dx = p[0] - ax - tt * vx2, dy = p[1] - ay - tt * vy2, pad = Math.max(k[4] * man.h + 5, 16 * man.w / p[2] / zoom);
       if (dx * dx + dy * dy < pad * pad) return 'knob';
       if (inQuad(g.capL[i], p[0], p[1])) return 'L';
       if (inQuad(g.capR[i], p[0], p[1])) return 'R';
@@ -322,16 +366,20 @@
     function used() { el.classList.add('tqv-used'); }
     function toggle(side) { var j = side === 'L' ? 0 : 1; sw[j] = sw[j] ? 0 : 1; used(); kick(); }
     function setDim(v) { dim = Math.max(0, Math.min(1, v)); ringUntil = performance.now() + 1400; used(); kick(); }
+    function step(dxn, dyn) { settle = [clamp(Math.round(tx) + dxn, 0, NX - 1), clamp(Math.round(ty) + dyn, 0, NY - 1)]; vx = vy = 0; used(); kick(); }
+    function engage() { want(4); }
     canvas.addEventListener('pointerdown', function (ev) {
       if (!man || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+      engage();
       pid = ev.pointerId; try { canvas.setPointerCapture(pid); } catch (e) {}
-      sx = lastX = ev.clientX; sy = ev.clientY; sPos = pos; sDim = dim; moved = 0; lastMT = ev.timeStamp;
+      sx0 = lastX = ev.clientX; sy0 = lastY = ev.clientY; sPx = px; sPy = py; sDim = dim; moved = 0; lastMT = ev.timeStamp;
       var h = hit(ev);
       if (h === 'knob') mode = 'knob';
-      else { mode = 'rotate'; pend = h; dragging = true; vel = 0; settleTo = null; tpos = pos; }
+      else { mode = 'rotate'; pend = h; dragging = true; vx = vy = 0; settle = null; tx = px; ty = py; }
       canvas.style.cursor = mode === 'knob' ? 'ew-resize' : 'grabbing';
       kick();
     });
+    canvas.addEventListener('pointerenter', function () { if (man) engage(); });
     canvas.addEventListener('pointermove', function (ev) {
       if (!man) return;
       if (mode === null) {
@@ -341,17 +389,18 @@
         return;
       }
       if (ev.pointerId !== pid) return;
-      var dx = ev.clientX - sx, dy = ev.clientY - sy, w = csW || canvas.getBoundingClientRect().width;
+      var dx = ev.clientX - sx0, dy = ev.clientY - sy0, w = csW || canvas.getBoundingClientRect().width;
       moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
       if (mode === 'knob') { if (moved > 4) setDim(sDim + (dx - dy) / 150); }
       else {
         if (moved > 6) { pend = null; used(); }
-        var fpp = (man.n - 1) / (w * 1.5), np = sPos - dx * fpp;
-        var lim = [loaded[0], loaded[loaded.length - 1]];
-        np = Math.max(lim[0], Math.min(lim[1], np));
+        // the same angular speed on both axes; dragging down brings the camera up
+        var ax = (NX - 1) / (w * 1.5), ay = ax * (man.azStep / man.elStep);
+        tx = clamp(sPx - dx * ax, 0, NX - 1); ty = clamp(sPy + dy * ay, 0, NY - 1);
         var dtm = Math.max(1, ev.timeStamp - lastMT);
-        vel = 0.6 * vel + 0.4 * (-(ev.clientX - lastX) * fpp / dtm);
-        lastX = ev.clientX; lastMT = ev.timeStamp; tpos = np;
+        vx = 0.6 * vx + 0.4 * (-(ev.clientX - lastX) * ax / dtm);
+        vy = 0.6 * vy + 0.4 * ((ev.clientY - lastY) * ay / dtm);
+        lastX = ev.clientX; lastY = ev.clientY; lastMT = ev.timeStamp;
       }
       kick();
     });
@@ -361,70 +410,101 @@
         if (mode === 'knob' && moved <= 4) { if (dim > 0.02) { lastDim = dim; setDim(0); } else setDim(lastDim > 0.05 ? lastDim : 1); }
         if (mode === 'rotate' && pend && moved <= 6) toggle(pend);
       }
-      if (mode === 'rotate' && (moved <= 6 || ev.timeStamp - lastMT > 90)) vel = 0;
+      if (mode === 'rotate' && (moved <= 6 || ev.timeStamp - lastMT > 90)) { vx = 0; vy = 0; }
       mode = null; dragging = false; pend = null; pid = null; canvas.style.cursor = 'grab'; kick();
     }
     canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('pointerleave', function () { hoverKnob = false; kick(); });
     canvas.addEventListener('keydown', function (ev) {
+      if (!man) return;
       var k = ev.key, ok = true;
-      if (k === 'ArrowLeft') { settleTo = Math.max(loaded[0], Math.round(pos) - 3); used(); }
-      else if (k === 'ArrowRight') { settleTo = Math.min(loaded[loaded.length - 1], Math.round(pos) + 3); used(); }
-      else if (k === 'ArrowUp') setDim(dim + 0.1);
-      else if (k === 'ArrowDown') setDim(dim - 0.1);
+      engage();
+      if (k === 'ArrowLeft') step(-2, 0);
+      else if (k === 'ArrowRight') step(2, 0);
+      else if (k === 'ArrowUp') step(0, 1);
+      else if (k === 'ArrowDown') step(0, -1);
+      else if (k === '+' || k === '=' || k === 'PageUp') setDim(dim + 0.1);
+      else if (k === '-' || k === '_' || k === 'PageDown') setDim(dim - 0.1);
       else if (k === '1') toggle('L'); else if (k === '2') toggle('R');
       else ok = false;
-      if (ok) { ev.preventDefault(); vel = 0; kick(); }
+      if (ok) { ev.preventDefault(); kick(); }
     });
-    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; freeTex = []; lastPair = null; prog = null; });
+    Array.prototype.forEach.call(el.querySelectorAll('.tqv-tilt button'), function (b) {
+      b.addEventListener('click', function () { if (man) { engage(); step(0, +b.getAttribute('data-d')); } });
+    });
+    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; freeTex = []; lastSet = []; prog = null; });
     canvas.addEventListener('webglcontextrestored', function () { boot(); });
     if (window.ResizeObserver) new ResizeObserver(function () { csW = 0; if (man) kick(); }).observe(el);
     else window.addEventListener('resize', function () { csW = 0; if (man) kick(); });
 
     // ---------- loading ----------
-    function order() {
-      var fr = man.frames.slice(), home = man.home, seen = {}, out = [];
-      [16, 8, 4, 2, 1].forEach(function (step) {
-        var lvl = fr.filter(function (f) { return !seen[f] && (f - home) % step === 0; });
-        lvl.sort(function (a, b) { return Math.abs(a - home) - Math.abs(b - home); });
-        lvl.forEach(function (f) { seen[f] = 1; out.push(f); });
+    function stageNodes(s) {
+      var have = {}, out = [], a, e;
+      if (s > 0) for (e = 0; e < AEs[s - 1].length; e++) for (a = 0; a < AXs[s - 1].length; a++) have[AEs[s - 1][e] * NX + AXs[s - 1][a]] = 1;
+      for (e = 0; e < AEs[s].length; e++) for (a = 0; a < AXs[s].length; a++) {
+        var n = AEs[s][e] * NX + AXs[s][a];
+        if (!have[n] && avail[n]) out.push(n);
+      }
+      out.sort(function (m, n) {
+        return Math.hypot(((m % NX) - HX) * 2, (Math.floor(m / NX) - HY) * 3) - Math.hypot(((n % NX) - HX) * 2, (Math.floor(n / NX) - HY) * 3);
       });
       return out;
     }
-    function loadFrames() {
-      var q = order(), total = q.length, got = 0, active = 0;
-      function next() {
-        while (active < 4 && q.length) (function (i) {
-          active++;
-          fetch(base + 'frames/f_' + ('00' + i).slice(-3) + '.webp').then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
-            blobs[i] = b; loaded.push(i); loaded.sort(function (a, c) { return a - c; });
-          }).catch(function () {}).then(function () {
-            active--; got++; bar.style.width = (100 * got / total) + '%'; if (got === total) bar.classList.add('done');
-            kick(); next();
+    function updBar() { bar.style.width = (100 * bGot / Math.max(1, bTot)) + '%'; bar.classList.toggle('done', bGot >= bTot); }
+    function pump() {
+      while (active < 4 && queue.length) {
+        var n = queue.shift();
+        if (nstate[n] >= 2) continue;
+        (function (n) {
+          nstate[n] = 2; active++;
+          var ky = Math.floor(n / NX), ix = n - ky * NX;
+          fetch(base + 'frames/f_k' + ky + '_i' + ('00' + ix * 2).slice(-3) + '.webp').then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
+            blobs[n] = b; nstate[n] = 3;
+          }).catch(function () { nstate[n] = 4; }).then(function () {
+            active--; bGot++; updBar(); kick(); pump();
           });
-        })(q.shift());
+        })(n);
       }
-      next();
+    }
+    function bump(n) {                                  // a node is needed right now: it goes to the front of the queue
+      if (!avail[n] || nstate[n] >= 2) return;
+      var q = queue.indexOf(n);
+      if (q === 0) { pump(); return; }
+      if (q > 0) queue.splice(q, 1); else bTot++;
+      nstate[n] = 1; queue.unshift(n); updBar(); pump();
+    }
+    function want(s) {                                  // load every stage up to s
+      if (!man) { pendStage = Math.max(pendStage, s); return; }
+      while (sched < s) {
+        sched++;
+        stageNodes(sched).forEach(function (n) { if (!nstate[n]) { nstate[n] = 1; queue.push(n); bTot++; } });
+      }
+      updBar(); pump();
     }
     function boot() {
       initGL();
       var im = new Image();
-      im.onload = function () { gl.activeTexture(gl.TEXTURE2); lutTex = makeTex(im, false); kick(); };
+      im.onload = function () { gl.activeTexture(gl.TEXTURE4); lutTex = makeTex(im, false); kick(); };
       im.src = base + 'lut.png';
     }
     function start() {
       if (started) return; started = true;
       fetch(base + 'manifest.json').then(function (r) { return r.json(); }).then(function (m) {
-        man = m; pos = tpos = m.home; canvas.style.cursor = 'grab';
-        boot(); loadFrames();
+        man = m; NX = m.nx; NY = m.ny; HX = m.home[0]; HY = m.home[1];
+        m.frames.forEach(function (n) { avail[n] = 1; });
+        AXs = STAGES.map(function (s) { return axisSet(NX, HX, s[0]); });
+        AEs = STAGES.map(function (s) { return axisSet(NY, HY, s[1]); });
+        px = tx = HX; py = ty = HY; canvas.style.cursor = 'grab';
+        boot(); want(Math.max(1, pendStage));
       }).catch(function (e) { if (window.console) console.error('TILQE viewer:', e); });
     }
     if ('IntersectionObserver' in window) {
-      var io = new IntersectionObserver(function (en) { if (en[0].isIntersecting) { io.disconnect(); start(); } }, { rootMargin: '300px' });
+      var io = new IntersectionObserver(function (en) { if (en[0].isIntersecting) { io.disconnect(); start(); want(2); } }, { rootMargin: '300px' });
       io.observe(el);
-    } else start();
+    } else { start(); want(2); }
     var idleStart = function () { (window.requestIdleCallback || function (f) { setTimeout(f, 1200); })(start); };
     if (document.readyState === 'complete') idleStart(); else window.addEventListener('load', idleStart);
+    el._tqvState = function () { return { px: px, py: py, tx: tx, ty: ty, nx: NX, ny: NY, tex: Object.keys(texCache).length, blobs: Object.keys(blobs).length }; };
     return { el: el };
   }
 
