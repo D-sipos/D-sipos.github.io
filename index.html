@@ -7,7 +7,7 @@
 <meta name="description" content="David Sipos, vehicle engineer (MSc, KTH). Projects in mechanical design, vehicle dynamics, simulation and motorsport.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Familjen+Grotesk:wght@400..700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..900&display=swap" rel="stylesheet">
 <style>
 /* Layout idea: one left-aligned column of case studies on graphite; the only moving
    element is the telemetry strip in the hero, everything else stays still. */
@@ -20,8 +20,8 @@
   --dim:#8d96a3;         /* secondary text */
   --gold:#f0b429;        /* damper gold: the accent */
   --thr:#79cfa0; --brk:#ff7b6b; --str:#7db4ff;   /* telemetry channels */
-  --display:"Archivo","Arial Narrow",system-ui,sans-serif;
-  --body:"Familjen Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  --display:"Schibsted Grotesk","Helvetica Neue",Arial,system-ui,sans-serif;
+  --body:"Schibsted Grotesk","Helvetica Neue",Arial,system-ui,sans-serif;
   --wrap:1180px;
   --gut:clamp(18px,4vw,40px);
 }
@@ -32,12 +32,12 @@ img,video,canvas{max-width:100%;display:block}
 a{color:inherit}
 :focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:4px}
 .wrap{max-width:var(--wrap);margin-inline:auto;padding-inline:var(--gut)}
-h1,h2,h3{font-family:var(--display);font-stretch:125%;font-weight:800;line-height:1;letter-spacing:-.015em;margin:0;text-wrap:balance;color:#fff}
+h1,h2,h3{font-family:var(--display);font-weight:700;line-height:1.04;letter-spacing:-.025em;margin:0;text-wrap:balance;color:#fff}
 
 /* ---------- nav ---------- */
 .nav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 86%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .nav .wrap{display:flex;align-items:center;gap:18px;min-height:58px}
-.mark{white-space:nowrap;font-family:var(--display);font-stretch:125%;font-weight:800;color:#fff;text-decoration:none;letter-spacing:-.01em;margin-right:auto}
+.mark{white-space:nowrap;font-family:var(--display);font-weight:700;color:#fff;text-decoration:none;letter-spacing:-.01em;margin-right:auto}
 .nav ul{list-style:none;display:flex;gap:clamp(12px,2.4vw,28px);margin:0;padding:0}
 .nav ul a{text-decoration:none;color:var(--dim);font-size:.98rem}
 .nav ul a:hover{color:#fff}
@@ -49,7 +49,7 @@ h1,h2,h3{font-family:var(--display);font-stretch:125%;font-weight:800;line-heigh
 .hero{padding-top:clamp(40px,8vw,96px)}
 .status{display:inline-flex;align-items:center;gap:9px;color:var(--steel);font-size:.95rem;border:1px solid var(--line);border-radius:999px;padding:5px 13px 5px 11px;margin-bottom:clamp(20px,3vw,34px)}
 .status i{width:8px;height:8px;border-radius:50%;background:var(--thr)}
-.hero h1{font-size:clamp(3.4rem,10.4vw,8.6rem);line-height:.88;letter-spacing:-.03em}
+.hero h1{font-size:clamp(3.4rem,10.4vw,8.6rem);line-height:.92;letter-spacing:-.045em}
 .hero h1 span{display:inline-block}
 .lead{max-width:36ch;font-size:clamp(1.2rem,2.2vw,1.6rem);line-height:1.35;color:#fff;margin:clamp(20px,3vw,34px) 0 0}
 .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
@@ -88,7 +88,7 @@ section{padding-block:clamp(56px,9vw,120px)}
 .dims li{position:relative;padding-top:16px;color:var(--dim);font-size:.96rem;line-height:1.35}
 .dims li::before{content:"";position:absolute;left:0;right:0;top:4px;border-top:1px solid var(--dim)}
 .dims li::after{content:"";position:absolute;left:0;right:0;top:0;height:9px;border-inline:1px solid var(--dim)}
-.dims b{display:block;font-family:var(--display);font-stretch:125%;font-weight:800;font-size:clamp(1.7rem,3.4vw,2.4rem);line-height:1.1;color:#fff;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.dims b{display:block;font-family:var(--display);font-weight:700;font-size:clamp(1.7rem,3.4vw,2.4rem);line-height:1.1;color:#fff;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 
 /* figures */
 .media{display:grid;gap:14px;grid-template-columns:repeat(6,minmax(0,1fr))}
@@ -178,7 +178,7 @@ figcaption{color:var(--dim);font-size:.9rem;line-height:1.4;padding-top:8px}
 /* role list for NXT Gen Cup */
 .duties{list-style:none;margin:26px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .duties li{background:var(--panel);padding:20px 20px 22px;color:var(--dim);font-size:.98rem;line-height:1.45}
-.duties b{display:block;color:#fff;font-family:var(--display);font-stretch:125%;font-weight:700;font-size:1.15rem;margin-bottom:6px;letter-spacing:-.01em}
+.duties b{display:block;color:#fff;font-family:var(--display);font-weight:700;font-size:1.15rem;margin-bottom:6px;letter-spacing:-.01em}
 
 /* about */
 .about{display:grid;grid-template-columns:minmax(0,1fr);gap:clamp(28px,5vw,64px)}
@@ -708,7 +708,7 @@ document.addEventListener("keydown", function(e){ if (e.key === "Escape" && lb.c
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,W,H);
     var narrow = W < 560, span = narrow ? 7 : 13;      // seconds shown
-    var FONT = '500 13px "Familjen Grotesk",system-ui,sans-serif';
+    var FONT = '500 13px "Schibsted Grotesk",system-ui,sans-serif';
     ctx.font = FONT;
     var labW = 0;
     if (!narrow) { for (var m=0;m<4;m++) labW = Math.max(labW, ctx.measureText(u.ch[m]).width); labW = Math.ceil(labW) + 18; }
@@ -738,9 +738,9 @@ document.addEventListener("keydown", function(e){ if (e.key === "Escape" && lb.c
         // the labels travel with the traces: they are not cut at the end of the band, and leave at the left edge of the plot like the lines
         ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1-x0, H); ctx.clip();
         ctx.fillStyle = C.gold; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-        ctx.font = '600 13px "Familjen Grotesk",system-ui,sans-serif';
+        ctx.font = '600 13px "Schibsted Grotesk",system-ui,sans-serif';
         ctx.fillText(u.ev[e], xs+7, 15);
-        ctx.font = '500 12px "Familjen Grotesk",system-ui,sans-serif';
+        ctx.font = '500 12px "Schibsted Grotesk",system-ui,sans-serif';
         ctx.fillText(u.act, xs+7, g3.yb - g3.amp*0.72 - 6);
         ctx.restore();
       } else j++;
@@ -782,7 +782,7 @@ document.addEventListener("keydown", function(e){ if (e.key === "Escape" && lb.c
 var REDUCE = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 var COL = (function(){ var c = getComputedStyle(document.documentElement), o = {};
   ["thr","brk","str","gold","dim","line","steel","panel"].forEach(function(k){ o[k] = c.getPropertyValue("--"+k).trim(); }); return o; })();
-var TXT = '"Familjen Grotesk",system-ui,sans-serif';
+var TXT = '"Schibsted Grotesk",system-ui,sans-serif';
 function mount(id, draw, still){
   var cv = document.getElementById(id); if (!cv) return null;
   var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = 1, vis = false, raf = 0, last = null, t = still || 0;

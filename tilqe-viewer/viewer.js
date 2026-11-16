@@ -1,5 +1,6 @@
 /* TILQE 3-gang interactive viewer, 2D orbit (azimuth + elevation).
    Pre-rendered Cycles frames stored as separate light passes; the page re-lights them live.
+   Always shows exactly one rendered frame (the nearest one that is decoded), never a blend of two views.
    Usage:  <div data-tilqe-viewer></div> <script src="tilqe-viewer/viewer.js"></script>
    Options (data attributes): data-zoom="1.25"  data-hint="Drag to rotate ..."  data-base="path/to/tilqe-viewer/" */
 (function () {
@@ -32,10 +33,10 @@
   var FS = [
     'precision highp float;',
     'varying vec2 vUv;',
-    'uniform sampler2D uA,uB,uC,uD,uLut;',
+    'uniform sampler2D uA,uLut;',
     'uniform float uState,uPerRow,uLK,uK;',
-    'uniform vec4 uWt,uMaxv,uBw;',
-    'uniform vec2 uRectA,uRectB,uRectC,uRectD,uFrame,uAtlas,uCell;',
+    'uniform vec4 uWt,uMaxv;',
+    'uniform vec2 uRectA,uFrame,uAtlas,uCell;',
     'uniform vec3 uLutP;',
     'vec3 dec(vec3 p,float m){return (exp(p*uLK)-1.0)*(m/uK);}',
     'vec3 shade(sampler2D t,vec2 rect){',
@@ -71,11 +72,7 @@
     '}',
     'float hash(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}',
     'void main(){',
-    '  vec3 lin=vec3(0.0);',
-    '  if(uBw.x>0.0)lin+=uBw.x*shade(uA,uRectA);',
-    '  if(uBw.y>0.0)lin+=uBw.y*shade(uB,uRectB);',
-    '  if(uBw.z>0.0)lin+=uBw.z*shade(uC,uRectC);',
-    '  if(uBw.w>0.0)lin+=uBw.w*shade(uD,uRectD);',
+    '  vec3 lin=shade(uA,uRectA);',
     '  vec3 c=tm(lin)+(hash(gl_FragCoord.xy)-0.5)/255.0;',
     '  gl_FragColor=vec4(c,1.0);',
     '}'].join('\n');
@@ -110,13 +107,13 @@
     var man = null, prog = null, U = {}, lutTex = null;
     var NX = 0, NY = 0, HX = 0, HY = 0, AXs = [], AEs = [], avail = {};
     var blobs = {}, nstate = {}, queue = [], active = 0, bGot = 0, bTot = 0, sched = -1, pendStage = -1;
-    var texCache = {}, decoding = {}, nDecoding = 0, clock = 0, freeTex = [], lastSet = [];
-    var px = 0, py = 0, tx = 0, ty = 0, vx = 0, vy = 0, holdT = 0, dragging = false, settle = null;   // position and target in grid nodes (x: azimuth, y: elevation)
-    var MAXA = 0.1, MAXE = 0.067;     // fastest the picture may turn: nodes per millisecond (about 200 degrees per second)
+    var texCache = {}, decoding = {}, nDecoding = 0, clock = 0, freeTex = [], tries = {};
+    var px = 0, py = 0, tx = 0, ty = 0, vx = 0, vy = 0, dragging = false, settle = null, shown = -1, mvx = 0, mvy = 0;   // position and target in grid nodes (x: azimuth, y: elevation)
+    var MAXA = 0.3, MAXE = 0.2;       // fastest the picture may turn: nodes per millisecond (about 600 degrees per second)
     var sw = [1, 1], dim = 1, lastDim = 1;      // targets
     var cur = [1, 1, 1];                         // animated: dimmer, L, R
     var raf = 0, lastT = 0, ringUntil = 0, hoverKnob = false, started = false, live = false;
-    var MAXTEX = 20, csW = 0, ovI = -1, ovInit = false;
+    var MAXTEX = 24, MAXDEC = 4, csW = 0, ovI = -1, ovInit = false;
     var LET = 'ABCD';
 
     function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -130,8 +127,8 @@
       var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
       var loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      ['uA', 'uB', 'uC', 'uD', 'uLut', 'uState', 'uPerRow', 'uLK', 'uK', 'uWt', 'uMaxv', 'uBw', 'uRectA', 'uRectB', 'uRectC', 'uRectD', 'uFrame', 'uAtlas', 'uCell', 'uLutP', 'uZoom'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
-      gl.uniform1i(U.uA, 0); gl.uniform1i(U.uB, 1); gl.uniform1i(U.uC, 2); gl.uniform1i(U.uD, 3); gl.uniform1i(U.uLut, 4);
+      ['uA', 'uLut', 'uState', 'uPerRow', 'uLK', 'uK', 'uWt', 'uMaxv', 'uRectA', 'uFrame', 'uAtlas', 'uCell', 'uLutP', 'uZoom'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+      gl.uniform1i(U.uA, 0); gl.uniform1i(U.uLut, 4);
       gl.uniform1f(U.uZoom, zoom);
       gl.uniform2f(U.uFrame, man.w, man.h); gl.uniform2f(U.uAtlas, man.atlas[0], man.atlas[1]);
       gl.uniform2f(U.uCell, man.patch.cw, man.patch.ch); gl.uniform1f(U.uPerRow, man.patch.perRow);
@@ -159,11 +156,11 @@
     }
     function wantTex(n) {
       if (texCache[n]) { texCache[n].t = ++clock; return texCache[n].tex; }
-      if (!decoding[n] && blobs[n] && nDecoding < 5) {
+      if (!decoding[n] && blobs[n] && nDecoding < MAXDEC) {
         decoding[n] = true; nDecoding++;
         decodeBlob(blobs[n]).then(function (bm) {
           delete decoding[n]; nDecoding--;
-          if (gl.isContextLost()) return;
+          if (gl.isContextLost()) { if (bm.close) bm.close(); return; }
           texCache[n] = { tex: makeTex(bm, true), t: ++clock };
           if (bm.close) bm.close();
           evict(); kick();
@@ -171,15 +168,16 @@
       }
       return null;
     }
-    function evict() {
+    function dist(n, x, y) { return Math.hypot((n % NX) - x, (Math.floor(n / NX) - y) * 1.5); }
+    function evict() {                                  // keep the frames around the current view, drop the farthest
       var keys = Object.keys(texCache);
       if (keys.length <= MAXTEX) return;
-      keys.sort(function (a, b) { return texCache[a].t - texCache[b].t; });
-      for (var j = 0; j < keys.length - MAXTEX; j++) {
+      keys.sort(function (a, b) { return dist(+b, px, py) - dist(+a, px, py); });
+      for (var j = 0, drop = keys.length - MAXTEX; j < keys.length && drop > 0; j++) {
         var k = +keys[j];
-        if (lastSet.indexOf(k) >= 0) continue;
+        if (k === shown) continue;
         if (freeTex.length < 3) freeTex.push(texCache[k].tex); else gl.deleteTexture(texCache[k].tex);
-        delete texCache[k];
+        delete texCache[k]; drop--;
       }
     }
 
@@ -189,27 +187,12 @@
       for (var j = 0; j < len; j++) if ((((j - home) % s) + s) % s === 0 || j === 0 || j === len - 1) o.push(j);
       return o;
     }
-    function bracket(arr, v) {
-      var lo = arr[0], hi = arr[arr.length - 1];
-      for (var j = 0; j < arr.length; j++) { var f = arr[j]; if (f <= v) lo = f; if (f >= v) { hi = f; break; } }
-      return [lo, hi];
-    }
-    // the four surrounding nodes at the finest stage whose nodes are all there (fetched, or decoded when needTex)
-    function find(x, y, needTex) {
-      for (var s = STAGES.length - 1; s >= 0; s--) {
-        var a = bracket(AXs[s], x), e = bracket(AEs[s], y);
-        var ns = [e[0] * NX + a[0], e[0] * NX + a[1], e[1] * NX + a[0], e[1] * NX + a[1]], ok = true;
-        for (var j = 0; j < 4; j++) if (!(needTex ? texCache[ns[j]] : blobs[ns[j]])) { ok = false; break; }
-        if (ok) return { n: ns, wx: a[1] > a[0] ? (x - a[0]) / (a[1] - a[0]) : 0, wy: e[1] > e[0] ? (y - e[0]) / (e[1] - e[0]) : 0 };
-      }
-      return null;
-    }
-    function ready(x, y) {
-      var w = find(x, y, false);
-      if (!w) return true;
-      var ok = true;
-      for (var j = 0; j < 4; j++) if (!wantTex(w.n[j])) ok = false;
-      return ok;
+    function node(x, y) { return clamp(Math.round(y), 0, NY - 1) * NX + clamp(Math.round(x), 0, NX - 1); }
+    // the decoded frame closest to the view; the frame on screen is kept until another one is clearly closer
+    function nearestTex(x, y) {
+      var nc = -1, bd = 1e9;
+      for (var kk in texCache) { var n = +kk, d = dist(n, x, y) - (n === shown ? 0.12 : 0); if (d < bd) { bd = d; nc = n; } }
+      return nc;
     }
     function weights() {
       var c = [cur[0] * cur[0], cur[1], cur[2]], m = 0.5;   // m: how much each control also dims the shared light
@@ -227,50 +210,37 @@
       var h = Math.round(w * man.h / man.w);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     }
-    function bumpAround(x, y) {
-      var x0 = Math.floor(x), x1 = Math.ceil(x), y0 = Math.floor(y), y1 = Math.ceil(y);
-      bump(y0 * NX + x0); bump(y0 * NX + x1); bump(y1 * NX + x0); bump(y1 * NX + x1);
-    }
     function draw() {
-      if (!prog || gl.isContextLost()) return;
-      bumpAround(px, py);
-      var want = find(px, py, false), set = null, j;
-      if (want) { var all = true; for (j = 0; j < 4; j++) if (!wantTex(want.n[j])) all = false; if (all) set = want; }
-      if (!set) set = find(px, py, true);
-      if (!set) {                                      // show the closest node we already have instead of freezing
-        var nc = -1, bd = 1e9;
-        for (var kk in texCache) { var n = +kk, d = Math.hypot((n % NX) - px, (Math.floor(n / NX) - py) * 1.5); if (d < bd) { bd = d; nc = n; } }
-        if (nc >= 0) set = { n: [nc, nc, nc, nc], wx: 0, wy: 0 };
+      if (!prog || gl.isContextLost() || !lutTex) return;
+      // what to fetch and decode, most urgent first: where the view will be in a moment, where it is now, then further ahead.
+      // While turning fast only every few frames can be decoded in time, so the effort goes where the view is heading.
+      var ax = clamp(px + mvx * 70, 0, NX - 1), ay = clamp(py + mvy * 70, 0, NY - 1);
+      var bx = clamp(px + mvx * 150, 0, NX - 1), by = clamp(py + mvy * 150, 0, NY - 1);
+      var here = node(px, py), list = [node(ax, ay), here, node(bx, by)], j;
+      if (Math.abs(mvx) + Math.abs(mvy) < 0.004) {       // at rest or creeping: warm up the neighbours for the next move
+        list = [here, node(tx, ty), node(px + 1, py), node(px - 1, py), node(px, py + 1), node(px, py - 1), node(px + 2, py), node(px - 2, py)];
       }
-      if (!set) return;
-      lastSet = set.n;
-      // fetch and decode ahead, along the way to the target
-      var ddx = tx - px, ddy = ty - py, dl = Math.hypot(ddx, ddy);
-      if (dl > 0.01) {
-        var steps = Math.min(6, Math.ceil(dl));
-        for (var s = 1; s <= steps; s++) {
-          var qx = px + ddx * s / steps, qy = py + ddy * s / steps;
-          bumpAround(qx, qy);
-          if (s <= 3) { var q = find(qx, qy, false); if (q) for (j = 0; j < 4; j++) wantTex(q.n[j]); }
-        }
-      }
+      for (j = 0; j < list.length; j++) { bump(list[j]); wantTex(list[j]); }
+      var n = nearestTex(px, py);
+      if (n < 0) return;
       resize();
+      if (n === shown && sigOf() === lastSig && canvas.width === lastW) { overlay(); return; }
+      shown = n; lastSig = sigOf(); lastW = canvas.width;
+      texCache[n].t = ++clock;
       gl.viewport(0, 0, canvas.width, canvas.height);
-      for (j = 0; j < 4; j++) { gl.activeTexture(gl.TEXTURE0 + j); gl.bindTexture(gl.TEXTURE_2D, texCache[set.n[j]].tex); }
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCache[n].tex);
       gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, lutTex);
-      var bw = [(1 - set.wx) * (1 - set.wy), set.wx * (1 - set.wy), (1 - set.wx) * set.wy, set.wx * set.wy], sum = 0;
-      for (j = 0; j < 4; j++) { if (bw[j] < 0.003) bw[j] = 0; sum += bw[j]; }
-      for (j = 0; j < 4; j++) bw[j] /= sum;
       var w = weights(), R = man.patch.rects;
       gl.uniform4f(U.uWt, w[0], w[1], w[2], w[3]);
-      gl.uniform4f(U.uBw, bw[0], bw[1], bw[2], bw[3]);
       gl.uniform1f(U.uState, stateIndex());
-      for (j = 0; j < 4; j++) gl.uniform2f(U['uRect' + LET.charAt(j)], R[set.n[j]][0], R[set.n[j]][1]);
+      gl.uniform2f(U.uRectA, R[n][0], R[n][1]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       if (!live) { live = true; el.classList.add('tqv-live'); }
       overlay();
     }
-    function gi() { return clamp(Math.round(py), 0, NY - 1) * NX + clamp(Math.round(px), 0, NX - 1); }
+    var lastSig = '', lastW = 0;
+    function sigOf() { return cur[0].toFixed(4) + '|' + cur[1].toFixed(4) + '|' + cur[2].toFixed(4) + '|' + stateIndex(); }
+    function gi() { return shown >= 0 ? shown : node(px, py); }
     function arc(cx, cy, r, a0, a1) {
       var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
       return 'M' + x0.toFixed(1) + ' ' + y0.toFixed(1) + 'A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 ' + (a1 - a0 > Math.PI ? 1 : 0) + ' 1 ' + x1.toFixed(1) + ' ' + y1.toFixed(1);
@@ -315,17 +285,18 @@
           tx = settle[0]; ty = settle[1];
         }
       }
-      // the picture glides after the target at a limited speed and only moves on once the next frames are ready,
-      // so the motion stays continuous even when the decoding cannot keep up with a fast drag
-      var dx = tx - px, dy = ty - py;
+      // the view follows the target straight away; the picture shows the nearest frame that is decoded,
+      // so a fast drag skips frames instead of lagging behind the pointer
+      var dx = tx - px, dy = ty - py, opx = px, opy = py;
       if (Math.abs(dx) > 0.003 || Math.abs(dy) > 0.003) {
-        var kf = 1 - Math.exp(-dt / (dragging ? 7 : 45)), sx = dx * kf, sy = dy * kf, mx = MAXA * dt, my = MAXE * dt;
+        var kf = 1 - Math.exp(-dt / (dragging ? 4 : 45)), sx = dx * kf, sy = dy * kf, mx = MAXA * dt, my = MAXE * dt;
         sx = sx > mx ? mx : sx < -mx ? -mx : sx; sy = sy > my ? my : sy < -my ? -my : sy;
         if (!dt) { sx = 0; sy = 0; }
-        var nx = px + sx, ny = py + sy;
-        if (ready(nx, ny) || (holdT += dt) > 35) { px = nx; py = ny; holdT = 0; }
+        px += sx; py += sy;
         busy = true;
       } else { px = tx; py = ty; }
+      if (dt > 0) { var sm = Math.min(1, dt / 60); mvx += ((px - opx) / dt - mvx) * sm; mvy += ((py - opy) / dt - mvy) * sm; }
+      if (Math.abs(mvx) + Math.abs(mvy) > 0.0005) busy = true; else { mvx = 0; mvy = 0; }
       var tg = [dim, sw[0], sw[1]];
       for (var j = 0; j < 3; j++) {
         var e = tg[j] - cur[j];
@@ -432,7 +403,7 @@
     Array.prototype.forEach.call(el.querySelectorAll('.tqv-tilt button'), function (b) {
       b.addEventListener('click', function () { if (man) { engage(); step(0, +b.getAttribute('data-d')); } });
     });
-    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; freeTex = []; lastSet = []; prog = null; });
+    canvas.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); texCache = {}; freeTex = []; shown = -1; lastSig = ''; lutTex = null; prog = null; });
     canvas.addEventListener('webglcontextrestored', function () { boot(); });
     if (window.ResizeObserver) new ResizeObserver(function () { csW = 0; if (man) kick(); }).observe(el);
     else window.addEventListener('resize', function () { csW = 0; if (man) kick(); });
@@ -460,7 +431,11 @@
           var ky = Math.floor(n / NX), ix = n - ky * NX;
           fetch(base + 'frames/f_k' + ky + '_i' + ('00' + ix * 2).slice(-3) + '.webp').then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
             blobs[n] = b; nstate[n] = 3;
-          }).catch(function () { nstate[n] = 4; }).then(function () {
+          }).catch(function () {
+            tries[n] = (tries[n] || 0) + 1;
+            if (tries[n] < 4) { nstate[n] = 4; setTimeout(function () { nstate[n] = 1; bTot++; queue.push(n); updBar(); pump(); }, 1500 * tries[n]); }
+            else nstate[n] = 5;
+          }).then(function () {
             active--; bGot++; updBar(); kick(); pump();
           });
         })(n);
@@ -504,7 +479,8 @@
     } else { start(); want(2); }
     var idleStart = function () { (window.requestIdleCallback || function (f) { setTimeout(f, 1200); })(start); };
     if (document.readyState === 'complete') idleStart(); else window.addEventListener('load', idleStart);
-    el._tqvState = function () { return { px: px, py: py, tx: tx, ty: ty, nx: NX, ny: NY, tex: Object.keys(texCache).length, blobs: Object.keys(blobs).length }; };
+    el._tqvGo = function (x, y) { if (!man) return; engage(); settle = [clamp(Math.round(x), 0, NX - 1), clamp(Math.round(y), 0, NY - 1)]; vx = vy = 0; dragging = false; kick(); };
+    el._tqvState = function () { return { shown: shown, px: px, py: py, tx: tx, ty: ty, nx: NX, ny: NY, tex: Object.keys(texCache).length, blobs: Object.keys(blobs).length }; };
     return { el: el };
   }
 
