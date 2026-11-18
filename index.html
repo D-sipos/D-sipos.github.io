@@ -112,7 +112,7 @@ section{padding-block:clamp(56px,9vw,120px)}
 #tilqe .cmp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:0 0 clamp(22px,3vw,34px)}
 #tilqe .cmp figure{margin:0;min-width:0}
 #tilqe .media .third{grid-column:span 6}
-#tqmv{display:block;width:100%;height:auto;aspect-ratio:4/5;background:#2f2e2c;border-radius:10px;border:1px solid var(--line);--poster-color:#2f2e2c;--progress-bar-color:rgba(243,227,192,.55)}
+#tqmv{display:block;width:100%;aspect-ratio:4/5;background:#2f2e2c;border-radius:10px;border:1px solid var(--line);overflow:hidden}
 @media (max-width:520px){#tilqe .cmp{grid-template-columns:1fr}}
 .view [data-tilqe-viewer]{border-radius:10px;border:1px solid var(--line)}
 @media (max-width:520px){.media .third{grid-column:span 3}.media .third.wide{grid-column:span 4}}
@@ -314,8 +314,8 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-betw
             <figcaption data-i18n="tq.c4">Interactive render of the three-gang plate: drag to rotate, press the switches and turn the dimmer. Rendered in Blender and re-lit live in the browser.</figcaption>
           </figure>
           <figure class="view">
-            <model-viewer id="tqmv" src="tilqe-mv/tilqe-3gang.glb" poster="tilqe-mv/poster.webp" environment-image="tilqe-mv/studio.hdr" alt="Real-time 3D model of the TILQE three-gang plate" camera-controls touch-action="pan-y" interaction-prompt="none" tone-mapping="agx" exposure="0.95" shadow-intensity="0" camera-orbit="-20deg 81deg 0.95m" camera-target="0m 0m 0m" min-camera-orbit="-65deg 30deg 0.95m" max-camera-orbit="65deg 150deg 0.95m" field-of-view="17deg" min-field-of-view="6deg" max-field-of-view="17deg" interpolation-decay="90"></model-viewer>
-            <figcaption data-i18n="tq.c5">The same plate as a real-time 3D model in the browser (glTF in model-viewer): drag to rotate, scroll or pinch to zoom.</figcaption>
+            <div data-tilqe-rt id="tqmv" data-base="tilqe-mv/" data-poster="tilqe-mv/poster.webp" data-hint="Drag to rotate · press the switches · turn the dimmer"></div>
+            <figcaption data-i18n="tq.c5">The same plate as a real-time 3D model in the browser (three.js), lit from the same Blender scene: drag to rotate, scroll or pinch to zoom, click the switches and turn the dimmer.</figcaption>
           </figure>
       </div>
       <div class="cols flip">
@@ -553,7 +553,7 @@ var SV = {
 "tq.kind":"Medgrundare, produktutveckling, pågående",
 "tq.title":"TILQE: designade strömbrytare och uttag i metall",
 "tq.c1":"Prototyp med tre fack i borstad metall: dimmer, dubbel strömbrytare och uttag",
-"tq.c5":"Samma platta som en 3D-modell i realtid i webbläsaren (glTF i model-viewer): dra för att rotera, scrolla eller nyp för att zooma.",
+"tq.c5":"Samma platta som en 3D-modell i realtid i webbläsaren (three.js), belyst från samma Blender-scen: dra för att rotera, scrolla eller nyp för att zooma, tryck på strömbrytarna och vrid på dimmern.",
 "tq.c4":"Interaktiv rendering av trefacksplattan: dra för att rotera, tryck på strömbrytarna och vrid på dimmern. Renderad i Blender och ljussatt på nytt direkt i webbläsaren.",
 "tq.p1":"TILQE är ett hårdvarubolag som jag är medgrundare till, med stöd från KTH Innovation. Vi utvecklar strömbrytare, uttag och dimrar med noggrant utformad design i metall, till ett rimligare pris än de etablerade designmärkena.",
 "tq.p2":"Jag arbetar med produktutveckling och konstruktion för tillverkning (DFM). I praktiken innebär det CAD i Fusion, passnings- och toleransiterationer på utskrivna prototyper, FEM-kontroller av frontplattorna och att förbereda delar för CNC-bearbetning och ytbehandling.",
@@ -654,6 +654,8 @@ function setLang(l){
   renderContact();
   var tq = document.getElementById("tqv"), tqh = tq && tq.querySelector(".tqv-hint");
   if (tq) tq.setAttribute("data-hint", UI[l].tqv); if (tqh) tqh.textContent = UI[l].tqv;
+  var mv = document.getElementById("tqmv"), mvh = mv && mv.querySelector(".tqr-hint");
+  if (mv) mv.setAttribute("data-hint", UI[l].tqv); if (mvh) mvh.textContent = UI[l].tqv;
   if (window.drawTraceOnce) window.drawTraceOnce();
   GFX.forEach(function(g){ g.redraw(); });
   try { localStorage.setItem("ds-lang", l); } catch(e){}
@@ -1201,7 +1203,6 @@ var saved = null; try { saved = localStorage.getItem("ds-lang"); } catch(e){}
 setLang(saved === "sv" ? "sv" : "en");
 </script>
 <script src="tilqe-viewer/viewer.js"></script>
-<script>self.ModelViewerElement={meshoptDecoderLocation:"tilqe-mv/meshopt_decoder.js"};</script>
-<script type="module" src="tilqe-mv/model-viewer.min.js"></script>
+<script src="tilqe-mv/rt.js"></script>
 </body>
 </html>
